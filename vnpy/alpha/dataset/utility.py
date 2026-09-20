@@ -140,7 +140,7 @@ def calculate_by_expression(df: pl.DataFrame, expression: str) -> pl.DataFrame:
     from .math_function import (              # noqa
         less, greater, log, abs,
         sign, pow1, pow2,
-        quesval, quesval2
+        quesval, quesval2, cast_to_int
     )
 
     # Extract feature objects to local space

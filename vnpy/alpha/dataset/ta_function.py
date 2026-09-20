@@ -2,6 +2,8 @@
 Technical Analysis Operators
 """
 
+from typing import cast
+
 import talib
 import polars as pl
 import pandas as pd
@@ -17,7 +19,7 @@ def to_pd_series(feature: DataProxy) -> pd.Series:
 
 def to_pl_dataframe(series: pd.Series) -> pl.DataFrame:
     """Convert to polars.DataFrame data structure"""
-    return pl.from_pandas(series.reset_index().rename(columns={0: "data"}))
+    return cast(pl.DataFrame, pl.from_pandas(series.reset_index().rename(columns={0: "data"})))
 
 
 def ta_rsi(close: DataProxy, window: int) -> DataProxy:

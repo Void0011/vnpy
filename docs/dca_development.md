@@ -27,6 +27,8 @@ python -m venv .venv
 
 wheel 包含 `vnpy` 和本项目定制的 `vnpy_ctabacktester`。不要再用上游同名回测包覆盖本项目的定制模块。
 
+完整 Alpha 因子测试在独立 CI 环境安装 `.[alpha,dev]` 后运行。当前 Alpha 的间接依赖 `empyrical-reloaded` 与桌面 `vnpy_sqlite` 对 `peewee` 的版本要求冲突，应使用分开的环境，不要把 Alpha 依赖直接叠加到桌面交易环境。
+
 ## 桌面和提醒的计算口径
 
 两端三种周期策略已增加相同输入下的对照测试 `tests/test_dca_parity.py`。
@@ -60,6 +62,8 @@ wheel 包含 `vnpy` 和本项目定制的 `vnpy_ctabacktester`。不要再用上
 完整清仓后的无持仓日期不再重复展示。分红/拆股等非买卖流水尚未纳入现金流模型；XIRR 仍属于单独的可选扩展。
 
 ## 发布检查
+
+本项目 fork 的 `master` 保留用于同步官方 `vnpy/vnpy`；定制功能在 `codex/dca-live` 维护，并将该分支设为 fork 的默认分支供定时提醒运行。后续升级先同步 `master`，再合并到定制分支并执行测试；合并冲突在定制分支解决。不要使用丢弃本地提交的强制同步覆盖定制分支。
 
 - 运行上述 test / check / build；提醒任务单独运行标准库 unittest。
 - 明确列出拟提交文件；`.vntrader/`、原始交易流水、`.env`、`.history/`、个人会话报告应留在本地。

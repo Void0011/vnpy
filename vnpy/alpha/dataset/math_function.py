@@ -7,6 +7,11 @@ import polars as pl
 from .utility import DataProxy
 
 
+def cast_to_int(feature: DataProxy) -> DataProxy:
+    """Convert feature values to integers while preserving index columns."""
+    return DataProxy(feature.df.with_columns(pl.col("data").cast(pl.Int32)))
+
+
 def less(feature1: DataProxy, feature2: DataProxy | float) -> DataProxy:
     """Return the minimum value between two features"""
     if isinstance(feature2, DataProxy):
@@ -163,5 +168,4 @@ def pow2(base: DataProxy, exponent: DataProxy) -> DataProxy:
     ).select(["datetime", "vt_symbol", "data"])
 
     return DataProxy(df)
-
 
