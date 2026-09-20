@@ -1,0 +1,18 @@
+{
+  "cycle_anchor_date": "2026-07-01",
+  "cycle_days": 20,
+  "etfs": [
+    {
+      "symbol": "159792",
+      "name": "港股通互联网ETF富国",
+      "price_adjustment": "qfq",
+      "base_amount": 4000,
+      "drawdown_lookback_days": 120,
+      "bias_lookback_days": 120,
+      "target_growth": 4000,
+      "value_averaging_mode": "simulated",
+      "position_volume": 0,
+      "completed_periods": 0
+    }
+  ]
+}

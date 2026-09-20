@@ -1,6 +1,6 @@
 from abc import abstractmethod
 
-import pyqtgraph as pg      # type: ignore
+import pyqtgraph as pg
 
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
 from vnpy.trader.object import BarData

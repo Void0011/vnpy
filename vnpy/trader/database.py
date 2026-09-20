@@ -3,6 +3,7 @@ from datetime import datetime
 from types import ModuleType
 from dataclasses import dataclass
 from importlib import import_module
+from typing import cast
 
 from .constant import Interval, Exchange
 from .object import BarData, TickData
@@ -155,5 +156,5 @@ def get_database() -> BaseDatabase:
         module = import_module("vnpy_sqlite")
 
     # Create database object from module
-    database = module.Database()
+    database = cast(BaseDatabase, module.Database())
     return database

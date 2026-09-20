@@ -1,0 +1,89 @@
+name: ETF DCA reminder
+
+on:
+  schedule:
+    # Beijing 17:17, Monday-Friday. The script performs the actual exchange
+    # calendar, market-data freshness, cycle and duplicate checks.
+    - cron: "17 9 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force_send:
+        description: "Ignore the 20-trading-day gate (test only)"
+        required: true
+        type: boolean
+        default: true
+      dry_run:
+        description: "Build the dashboard without sending to Feishu"
+        required: true
+        type: boolean
+        default: true
+      as_of_date:
+        description: "Optional replay date (YYYY-MM-DD)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: etf-dca-reminder
+  cancel-in-progress: false
+
+jobs:
+  remind:
+    if: github.event_name == 'workflow_dispatch' || vars.DCA_REMINDER_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
+      DCA_REMINDER_CONFIG_JSON: ${{ secrets.DCA_REMINDER_CONFIG_JSON }}
+      DCA_CYCLE_ANCHOR: ${{ vars.DCA_CYCLE_ANCHOR }}
+      DCA_CYCLE_DAYS: ${{ vars.DCA_CYCLE_DAYS }}
+      DCA_FORCE_SEND: ${{ inputs.force_send || 'false' }}
+      DCA_DRY_RUN: ${{ inputs.dry_run || 'false' }}
+      DCA_AS_OF_DATE: ${{ inputs.as_of_date }}
+      DCA_REQUIRE_CURRENT_TRADE_DATE: "true"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dca-reminder.txt
+
+      - name: Run reminder unit tests
+        run: python -m unittest discover -s tests -p test_dca_reminder.py -v
+
+      - name: Install headless reminder dependencies
+        run: python -m pip install --requirement requirements-dca-reminder.txt
+
+      - name: Calculate signals and send dashboard
+        id: reminder
+        run: >-
+          python scripts/dca_reminder.py
+          --config .github/dca-reminder.json
+          --state .github/dca-reminder-state.json
+
+      - name: Persist duplicate-protection state
+        if: steps.reminder.outputs.state_changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/dca-reminder-state.json
+          git commit -m "chore: update DCA reminder state [skip ci]"
+          git push
+
+      - name: Send failure alert
+        if: failure()
+        continue-on-error: true
+        env:
+          DCA_FAILURE_MESSAGE: >-
+            GitHub Actions 运行失败：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python scripts/dca_reminder.py --send-failure-only "$DCA_FAILURE_MESSAGE"

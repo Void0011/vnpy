@@ -3,6 +3,11 @@
 *.pyo
 *.pyd
 *.egg-info/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # Jupyter
 .ipynb_checkpoints
@@ -10,6 +15,7 @@
 # IDE
 .vscode
 .idea
+.history/
 *.wpr
 *.wpu
 .vs
@@ -18,10 +24,33 @@ x64
 # Temp
 build
 dist
+.tmp/
+tmp/
 *.local
+*.log
+*.bak
+*.swp
+
+# Local environment and secrets
+.env
+.venv/
+.venv/
+.env.*
+!.env.example
+*.secret
+*.secrets
 
 # VeighNa
 .vntrader
+
+# Personal trading/account data
+my_trade_data/
+personal_data/
+private_data/
+trade_statements/
+daily_investment_setting.json
+daily_investment_records.json
+personal_investment_records.json
 
 # Visual Studio intermediate files
 *.exp
@@ -41,3 +70,11 @@ _templates
 # Alpha
 lab/
 /.mypy_cache
+
+# Local recovery notes contain personal workspace/session references
+/docs/project_restart_*.md
+/docs/project_restart_status*.md
+
+# Local recovery notes contain personal workspace/session references
+/docs/project_restart_*.md
+/docs/project_restart_status*.md

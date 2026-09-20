@@ -1,6 +1,7 @@
 from types import ModuleType
 from collections.abc import Callable
 from importlib import import_module
+from typing import cast
 
 from .object import HistoryRequest, TickData, BarData
 from .setting import SETTINGS
@@ -58,7 +59,7 @@ def get_datafeed() -> BaseDatafeed:
             module: ModuleType = import_module(module_name)
 
             # Create datafeed object from module
-            datafeed = module.Datafeed()
+            datafeed = cast(BaseDatafeed, module.Datafeed())
         # Use base class if failed
         except ModuleNotFoundError:
             datafeed = BaseDatafeed()

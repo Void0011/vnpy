@@ -35,7 +35,9 @@ dependencies = [
     "plotly>=6.0.0",
     "tqdm>=4.67.1",
     "loguru>=0.7.3",
-    "nbformat>=5.10.4"
+    "nbformat>=5.10.4",
+    "akshare>=1.18.0",
+    "yfinance>=0.2.65"
 ]
 keywords = ["quant", "quantitative", "investment", "trading", "algotrading"]
 
@@ -50,6 +52,12 @@ alpha = [
     "pyarrow>=19.0.1",
 ]
 dev = [
+    "pytest>=8.0",
+    "ruff>=0.11",
+    "mypy>=1.15",
+    "build>=1.2",
+    "types-requests",
+    "types-tqdm",
     "pandas-stubs>=2.2.3.250308",
     "hatchling>=1.27.0",
     "babel>=2.17.0",
@@ -71,7 +79,7 @@ path = "vnpy/__init__.py"
 pattern = "__version__ = ['\"](?P<version>[^'\"]+)['\"]"
 
 [tool.hatch.build.targets.wheel]
-packages = ["vnpy"]
+packages = ["vnpy", "vnpy_ctabacktester"]
 include-package-data = true
 
 [tool.hatch.build.targets.sdist]
@@ -114,6 +122,10 @@ warn_no_return = true
 [[tool.mypy.overrides]]
 module = [
     "polars",
+    "akshare",
+    "yfinance",
+    "pyqtgraph.*",
+    "scipy.*",
     "lightgbm",
     "hatchling.*"
 ]

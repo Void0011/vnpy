@@ -1,0 +1,3 @@
+# Deliberately separate from the desktop application's heavy GUI/TA-Lib stack.
+# This exact version passed the live-data dry-run for the first release.
+akshare==1.18.74

@@ -1,9 +1,10 @@
 import pytest
-import polars as pl
 import numpy as np
 from datetime import datetime, timedelta
 
-from vnpy.alpha.dataset.utility import calculate_by_expression
+pl = pytest.importorskip("polars", reason="Alpha tests require the optional vnpy[alpha] dependencies")
+
+from vnpy.alpha.dataset.utility import calculate_by_expression  # noqa: E402
 
 
 def create_test_df(n_symbols: int = 50, n_days: int = 300) -> pl.DataFrame:

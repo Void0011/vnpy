@@ -1,6 +1,6 @@
 from datetime import datetime
 
-import pyqtgraph as pg      # type: ignore
+import pyqtgraph as pg
 
 from vnpy.trader.ui import QtGui, QtWidgets, QtCore
 from vnpy.trader.object import BarData

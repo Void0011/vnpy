@@ -1,6 +1,14 @@
 name: Python application
 
-on: [push]
+on:
+  push:
+    paths-ignore:
+      - '.github/dca-reminder-state.json'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -8,9 +16,9 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - name: Set up Python 3.13
-      uses: actions/setup-python@v1
+      uses: actions/setup-python@v5
       with:
         python-version: '3.13'
     - name: Install dependencies
@@ -23,6 +31,10 @@ jobs:
       run: |
         # Run ruff linter based on pyproject.toml configuration
         ruff check .
+    - name: Test project
+      run: python -m pytest tests -q
+      env:
+        QT_QPA_PLATFORM: offscreen
     - name: Type check with mypy
       run: |
         # Run mypy type checking based on pyproject.toml configuration
