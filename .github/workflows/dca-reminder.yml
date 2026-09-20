@@ -1,6 +1,14 @@
 name: ETF DCA reminder
 
 on:
+  push:
+    branches: [codex/dca-live]
+    paths:
+      - scripts/dca_reminder.py
+      - tests/test_dca_reminder.py
+      - requirements-dca-reminder.txt
+      - .github/dca-reminder.json
+      - .github/workflows/dca-reminder.yml
   schedule:
     # Beijing 17:17, Monday-Friday. The script performs the actual exchange
     # calendar, market-data freshness, cycle and duplicate checks.
@@ -31,7 +39,7 @@ concurrency:
 
 jobs:
   remind:
-    if: github.event_name == 'workflow_dispatch' || vars.DCA_REMINDER_ENABLED == 'true'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || vars.DCA_REMINDER_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -40,8 +48,8 @@ jobs:
       DCA_REMINDER_CONFIG_JSON: ${{ secrets.DCA_REMINDER_CONFIG_JSON }}
       DCA_CYCLE_ANCHOR: ${{ vars.DCA_CYCLE_ANCHOR }}
       DCA_CYCLE_DAYS: ${{ vars.DCA_CYCLE_DAYS }}
-      DCA_FORCE_SEND: ${{ inputs.force_send || 'false' }}
-      DCA_DRY_RUN: ${{ inputs.dry_run || 'false' }}
+      DCA_FORCE_SEND: ${{ github.event_name == 'push' && 'true' || inputs.force_send || 'false' }}
+      DCA_DRY_RUN: ${{ github.event_name == 'push' && 'true' || inputs.dry_run || 'false' }}
       DCA_AS_OF_DATE: ${{ inputs.as_of_date }}
       DCA_REQUIRE_CURRENT_TRADE_DATE: "true"
 
@@ -81,7 +89,7 @@ jobs:
           git push
 
       - name: Send failure alert
-        if: failure()
+        if: failure() && github.event_name != 'push'
         continue-on-error: true
         env:
           DCA_FAILURE_MESSAGE: >-

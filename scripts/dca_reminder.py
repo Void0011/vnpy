@@ -14,12 +14,15 @@ from datetime import date, datetime, timedelta
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import sys
+import time
 from typing import Any
 from collections.abc import Iterable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -437,20 +440,72 @@ def load_etf_bars(symbol: str, start: date, end: date, adjustment: str = "qfq") 
     except ImportError as exc:
         raise ReminderError("缺少 AkShare，请安装 requirements-dca-reminder.txt") from exc
 
-    try:
-        frame = ak.fund_etf_hist_em(
-            symbol=symbol,
-            period="daily",
-            start_date=start.strftime("%Y%m%d"),
-            end_date=end.strftime("%Y%m%d"),
-            adjust=adjustment,
+    errors: list[str] = []
+    for attempt in range(2):
+        try:
+            frame = ak.fund_etf_hist_em(
+                symbol=symbol,
+                period="daily",
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                adjust=adjustment,
+            )
+            bars = dataframe_to_bars(frame)
+            if not bars:
+                raise ReminderError("行情为空")
+            print(f"{symbol} 行情来源=东方财富 复权={adjustment or 'none'}")
+            return bars
+        except Exception as exc:
+            errors.append(f"东方财富: {type(exc).__name__}: {exc}")
+            if attempt == 0:
+                time.sleep(1)
+
+    for attempt in range(2):
+        try:
+            bars = load_tencent_bars(symbol, start, end, adjustment)
+            print(f"{symbol} 行情来源=腾讯（东方财富失败后切换） 复权请求={adjustment or 'none'}")
+            return bars
+        except Exception as exc:
+            errors.append(f"腾讯: {type(exc).__name__}: {exc}")
+            if attempt == 0:
+                time.sleep(1)
+    raise ReminderError(f"{symbol} 行情下载失败：" + "；".join(errors))
+
+
+def load_tencent_bars(symbol: str, start: date, end: date, adjustment: str) -> list[PriceBar]:
+    """Fetch yearly chunks from Tencent using the same adjustment request.
+
+    Tencent uses day/qfqday/hfqday keys; its day-first convention also appears
+    in AkShare's stock_zh_a_hist_tx adapter. ETFs can have six-column rows.
+    """
+    market_symbol = ("sh" if symbol.startswith(("5", "6")) else "sz") + symbol
+    bars: dict[date, PriceBar] = {}
+    for year in range(start.year, end.year + 1):
+        chunk_start = max(start, date(year, 1, 1))
+        chunk_end = min(end, date(year, 12, 31))
+        query = urlencode({
+            "param": f"{market_symbol},day,{chunk_start},{chunk_end},640,{adjustment}",
+        })
+        request = Request(
+            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?" + query,
+            headers={"User-Agent": "Mozilla/5.0"},
         )
-    except Exception as exc:
-        raise ReminderError(f"{symbol} AkShare 行情下载失败：{type(exc).__name__}: {exc}") from exc
-    bars = dataframe_to_bars(frame)
+        with urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("code") != 0:
+            raise ReminderError("腾讯行情接口返回错误")
+        data = payload.get("data", {}).get(market_symbol, {})
+        rows = data.get(f"{adjustment}day") or data.get("day") or []
+        for row in rows:
+            trade_date = date.fromisoformat(row[0])
+            close, high = float(row[2]), float(row[3])
+            if start <= trade_date <= end and math.isfinite(close) and close > 0:
+                if not math.isfinite(high) or high <= 0:
+                    raise ReminderError("腾讯行情最高价无效")
+                bars[trade_date] = PriceBar(trade_date, close, high)
     if not bars:
-        raise ReminderError(f"{symbol} 行情为空")
-    return bars
+        raise ReminderError("腾讯行情为空")
+    return sorted(bars.values(), key=lambda bar: bar.trade_date)
 
 
 def is_exchange_trade_day(day: date) -> bool:

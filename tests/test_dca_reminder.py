@@ -1,10 +1,13 @@
 from datetime import date, timedelta
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, Mock, patch
+from urllib.parse import parse_qs, urlparse
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "dca_reminder.py"
@@ -43,6 +46,43 @@ def create_config(**overrides) -> dict:
 
 
 class DcaReminderTest(unittest.TestCase):
+    def test_tencent_fallback_preserves_adjustment_and_handles_etf_rows(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "code": 0, "data": {"sz159792": {"qfqday": [
+                ["2026-07-03", "10", "9", "11", "8", "100"],
+                ["2026-07-01", "10", "10", "12", "9", "100"],
+                ["2026-07-04", "10", "11", "12", "9", "100"],
+            ]}},
+        }).encode()
+        with patch.object(dca_reminder, "urlopen", return_value=response) as request:
+            bars = dca_reminder.load_tencent_bars("159792", date(2026, 7, 1), date(2026, 7, 3), "qfq")
+        self.assertEqual([bar.trade_date.day for bar in bars], [1, 3])
+        self.assertEqual([bar.close for bar in bars], [10, 9])
+        query = parse_qs(urlparse(request.call_args.args[0].full_url).query)
+        self.assertEqual(query["param"], ["sz159792,day,2026-07-01,2026-07-03,640,qfq"])
+        self.assertEqual(request.call_args.kwargs["timeout"], 20)
+
+    def test_primary_network_failure_retries_before_fallback(self) -> None:
+        primary = Mock(side_effect=ConnectionError("synthetic connection closed"))
+        expected = create_bars([10, 9])
+        with patch.dict(sys.modules, {"akshare": SimpleNamespace(fund_etf_hist_em=primary)}), \
+                patch.object(dca_reminder.time, "sleep"), \
+                patch.object(dca_reminder, "load_tencent_bars", return_value=expected) as fallback:
+            result = dca_reminder.load_etf_bars("159792", date(2026, 7, 1), date(2026, 7, 2), "qfq")
+        self.assertEqual(primary.call_count, 2)
+        fallback.assert_called_once_with("159792", date(2026, 7, 1), date(2026, 7, 2), "qfq")
+        self.assertEqual(result, expected)
+
+    def test_all_market_sources_failing_stops_calculation(self) -> None:
+        primary = Mock(side_effect=ConnectionError("synthetic primary failure"))
+        with patch.dict(sys.modules, {"akshare": SimpleNamespace(fund_etf_hist_em=primary)}), \
+                patch.object(dca_reminder.time, "sleep"), \
+                patch.object(dca_reminder, "load_tencent_bars", side_effect=ValueError("empty data")) as fallback:
+            with self.assertRaisesRegex(dca_reminder.ReminderError, "行情下载失败"):
+                dca_reminder.load_etf_bars("159792", date(2026, 7, 1), date(2026, 7, 2))
+        self.assertEqual(fallback.call_count, 2)
+
     def test_duplicate_history_survives_an_intervening_message(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / "state.json"
