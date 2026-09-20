@@ -31,14 +31,14 @@ jobs:
       run: |
         # Run ruff linter based on pyproject.toml configuration
         ruff check .
+    - name: Type check with mypy
+      run: |
+        # Match the interpreter used to install dependency type declarations.
+        mypy vnpy --python-version 3.13
     - name: Test project
       run: python -m pytest tests -q
       env:
         QT_QPA_PLATFORM: offscreen
-    - name: Type check with mypy
-      run: |
-        # Run mypy type checking based on pyproject.toml configuration
-        mypy vnpy
     - name: Build packages with uv
       run: |
         # Build source distribution and wheel distribution
