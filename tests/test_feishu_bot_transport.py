@@ -1,13 +1,15 @@
 """Feishu event boundaries and SDK requests, without a real account or messages."""
 import importlib.util
 import json
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 from scripts.feishu_bot import (
     ExchangeCalendar, FeishuTransport, bounded_market, callback_from_event,
-    data_request, message_from_event,
+    data_request, legacy_sent_keys, message_from_event,
 )
 from scripts.dca_reminder import ReminderError
 
@@ -23,6 +25,19 @@ def message(chat_type="p2p", mentions=None, text="产品列表"):
 class EventTest(unittest.TestCase):
     def test_private_message_needs_no_mention(self):
         self.assertEqual(message_from_event(message(), "bot"), ("message1", "owner", "chat", "产品列表"))
+
+    def test_legacy_ledger_accepts_missing_and_old_formats_but_rejects_corruption(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "state.json"
+            self.assertEqual(legacy_sent_keys(path), [])
+            for state in [{"last_message_key": "a" * 64},
+                          {"sent_message_keys": ["a" * 64, "a" * 64], "last_message_key": "a" * 64}]:
+                path.write_text(json.dumps(state), encoding="utf-8")
+                self.assertEqual(legacy_sent_keys(path), ["a" * 64])
+            for state in ["{broken", "[]", '{"sent_message_keys":"invalid"}', '{"last_message_key":null}']:
+                path.write_text(state, encoding="utf-8")
+                with self.assertRaises(ReminderError):
+                    legacy_sent_keys(path)
 
     def test_group_requires_an_actual_mention_of_this_bot(self):
         self.assertIsNone(message_from_event(message("group"), "bot"))
@@ -65,6 +80,9 @@ class EventTest(unittest.TestCase):
             request.assert_called_once()
             with self.assertRaises(ReminderError):
                 calendar.is_trade_day(date(2027, 1, 1))
+        with patch("scripts.feishu_bot.data_request", return_value=["2026-01-02", "2026-07-03"]):
+            with self.assertRaises(ReminderError):
+                ExchangeCalendar().is_trade_day(date(2026, 7, 6))
 
     def test_market_transport_converts_only_returned_prices(self):
         from datetime import date

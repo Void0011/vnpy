@@ -35,8 +35,18 @@ class BotStore:
                     id TEXT PRIMARY KEY, chat TEXT, payload TEXT, sent INTEGER DEFAULT 0,
                     attempts INTEGER DEFAULT 0, next_attempt REAL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS schedule (day TEXT PRIMARY KEY, completed INTEGER DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS legacy_sent (id TEXT PRIMARY KEY);
             """)
             db.execute("INSERT OR IGNORE INTO config VALUES (1, 0, ?)", (encode(seed),))
+
+    def import_sent(self, keys: list[str]) -> None:
+        """Import the previous webhook ledger without resetting local history."""
+        with self.connect() as db:
+            db.executemany("INSERT OR IGNORE INTO legacy_sent VALUES(?)", ((key,) for key in keys))
+
+    def previously_sent(self, key: str) -> bool:
+        with self.connect() as db:
+            return db.execute("SELECT 1 FROM legacy_sent WHERE id=?", (key,)).fetchone() is not None
 
     @contextmanager
     def connect(self):

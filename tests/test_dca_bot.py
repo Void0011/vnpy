@@ -147,6 +147,25 @@ class BotTest(unittest.TestCase):
         self.store.delivery_result("key", True)
         self.assertEqual(self.store.queue_stats()[1], 0)
 
+    def test_imported_legacy_delivery_skips_same_cycle_after_restart_but_allows_next(self):
+        self.confirm(self.command("绑定推送"))
+        config = reminder.normalize_etf_config(SEED["etfs"][0], SEED, use_env=False)
+        dashboard = reminder.calculate_dashboard(bars(), config)
+        key = reminder.dashboard_message_key([dashboard], reminder.config_digest({"etfs": [config]}))
+        self.store.import_sent([key, key])
+        self.bot.store = BotStore(self.path, SEED)
+        self.bot.scheduled_check()
+        self.assertEqual(self.store.queue_stats()[1], 0)
+        self.assertTrue(self.store.schedule_done("2026-07-03"))
+        self.bot.receive("manual", "owner", "chat", "推送全部")
+        self.bot.process_one()
+        self.assertEqual(self.store.queue_stats()[1], 1)
+        self.now = datetime(2026, 7, 7, 18, tzinfo=ZoneInfo("Asia/Shanghai"))
+        self.bot.market = lambda *args: bars() + [
+            reminder.PriceBar(date(2026, 7, day), 10, 10) for day in (6, 7)]
+        self.bot.scheduled_check()
+        self.assertEqual(self.store.queue_stats()[1], 2)
+
     def test_scheduled_outage_isolated_per_product_and_retries_without_duplicate(self):
         self.confirm(self.command("新增ETF 510300 名称=示例ETF 锚点=2026-07-01", key="add"))
         self.confirm(self.command("绑定推送", key="bind"))

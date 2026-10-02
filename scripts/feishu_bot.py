@@ -56,7 +56,7 @@ class ExchangeCalendar:
         if self.loaded_day != today:
             self.days = {date.fromisoformat(value) for value in data_request({"kind": "calendar"})}
             self.loaded_day = today
-        if not self.days or day.year > max(self.days).year or day < min(self.days):
+        if not self.days or day > max(self.days) or day < min(self.days):
             raise reminder.ReminderError("交易日历不覆盖请求日期")
         return day in self.days
 
@@ -188,9 +188,26 @@ def worker(service: BotService, transport: FeishuTransport, stop: threading.Even
         stop.wait(1)
 
 
+def legacy_sent_keys(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(state, dict) or not isinstance(state.get("sent_message_keys", []), list):
+            raise ValueError("invalid ledger")
+        keys = [*state.get("sent_message_keys", []), state.get("last_message_key", "")]
+        if any(not isinstance(key, str) or (key and not re.fullmatch(r"[a-f0-9]{64}", key)) for key in keys):
+            raise ValueError("invalid key")
+        return list(dict.fromkeys(key for key in keys if key))
+    except (OSError, ValueError) as exc:
+        raise reminder.ReminderError("旧提醒发送记录无法读取，请核对文件后再启动") from exc
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="飞书定投助手（应用机器人长连接）")
     parser.add_argument("--config", type=Path, default=Path(".github/dca-reminder.json"))
+    parser.add_argument("--legacy-state", type=Path, default=reminder.DEFAULT_STATE_PATH,
+                        help="迁移旧 Webhook 的发送记录；每次启动增量导入")
     parser.add_argument("--check", action="store_true", help="检查部署参数，不连接飞书")
     parser.add_argument("--data-request", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -224,6 +241,7 @@ def main() -> int:
         clean_config(item, seed)
     data_dir = Path(os.getenv("DCA_BOT_DATA_DIR", ".bot-data"))
     store = BotStore(data_dir / "bot.sqlite3", seed)
+    store.import_sent(legacy_sent_keys(args.legacy_state))
     calendar = ExchangeCalendar()
     service = BotService(store, owners, market=bounded_market, trade_day=calendar.is_trade_day,
                          scheduler_enabled=reminder.env_bool("DCA_BOT_SCHEDULE_ENABLED"))

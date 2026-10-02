@@ -311,7 +311,8 @@ class BotService:
                 dashboard = reminder.calculate_dashboard(self.bars(config, day), config)
                 if dashboard.cycle_due:
                     key = reminder.dashboard_message_key([dashboard], reminder.config_digest({"etfs": [config]}))
-                    self.store.queue(f"schedule:{chat}:{key}", chat, reminder.build_feishu_card([dashboard]))
+                    if not self.store.previously_sent(key):
+                        self.store.queue(f"schedule:{key}", chat, reminder.build_feishu_card([dashboard]))
             except Exception:
                 failed = True
                 self.store.queue(f"failure:{day}:{symbol}", chat, text_message(

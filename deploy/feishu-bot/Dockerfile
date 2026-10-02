@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements-feishu-bot.txt \
     && mkdir /app/data && chown bot:bot /app/data
 COPY scripts ./scripts
 COPY .github/dca-reminder.json ./.github/dca-reminder.json
+COPY .github/dca-reminder-state.json ./.github/dca-reminder-state.json
 USER bot
 HEALTHCHECK --interval=60s --timeout=5s --start-period=120s --retries=3 \
     CMD python -c "import pathlib,time; p=pathlib.Path('/app/data/heartbeat'); assert p.exists() and time.time()-float(p.read_text()) < 1800"

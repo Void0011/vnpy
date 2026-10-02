@@ -5,6 +5,7 @@
 !requirements-feishu-bot.txt
 !.github/
 !.github/dca-reminder.json
+!.github/dca-reminder-state.json
 !deploy/
 !deploy/feishu-bot/
 !deploy/feishu-bot/Dockerfile

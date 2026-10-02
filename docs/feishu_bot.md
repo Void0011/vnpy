@@ -110,7 +110,7 @@ docker compose -f deploy/feishu-bot/compose.yaml logs --tail=50
 1. 保持 `DCA_BOT_SCHEDULE_ENABLED=false`，完成私聊“帮助”、群内 @、身份限制及一张即时看板的验收。
 2. 在希望接收正式提醒的会话发送“绑定推送”，核对预览并确认。
 3. 到 [GitHub Actions Variables](https://github.com/Void0011/vnpy/settings/variables/actions) 将旧 `DCA_REMINDER_ENABLED` 改为 `false`，等待已运行任务完成。
-4. 将服务器 `.env.feishu` 的 `DCA_BOT_SCHEDULE_ENABLED` 改为 `true`，重新执行 `docker compose ... up -d`。
+4. 在服务器运行 `git pull --ff-only` 拉取最新发送记录，再将 `.env.feishu` 的 `DCA_BOT_SCHEDULE_ENABLED` 改为 `true`，执行 `docker compose -f deploy/feishu-bot/compose.yaml up -d --build`。本次必须重建镜像，才能导入刚停止的旧工作流的最新记录。
 5. 向应用机器人发送“状态”，确认新定时已开启且会话正确。
 
 云端进程每 15 分钟核查最近已到达的工作日北京时间 **17:17** 检查点，因此通常在 17:17–17:32 之间开始检查；仍取决于服务器、网络和行情数据可用性。跨午夜延迟按前一计划检查日处理，修复此前次日凌晨要求尚未生成收盘行情的问题。交易日历不可用时停止计算并重试，不将节假日猜成交易日。
@@ -119,7 +119,7 @@ docker compose -f deploy/feishu-bot/compose.yaml logs --tail=50
 
 发送队列先落库，再调用飞书；调用失败使用相同 UUID 重试。平台 UUID 去重存在平台自身的有效期限制，不能承诺跨无限时间的网络故障也绝不重复。管理员应关注长期积压的“待发送消息”计数和容器健康状态。
 
-迁移前，旧 GitHub 提醒继续使用原 Webhook；迁移后只启用应用机器人的定时。两套系统的发送账本彼此独立，**不要同时开启两套定时**。
+迁移前，旧 GitHub 提醒继续使用原 Webhook；迁移后只启用应用机器人的定时。启动时会将镜像内 `.github/dca-reminder-state.json` 的已发送标识增量导入数据库，以跳过同一配置、同一日期已发送的产品；已有数据库记录不会被覆盖。当前单产品旧记录和新版按产品记录可直接迁移，早期多产品合并卡片记录不能拆分，应在非到期日切换并核对。之后两套账本不会自动同步，**不要同时开启两套定时**。
 
 ## 趋势优先卡片
 
