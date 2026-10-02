@@ -35,6 +35,7 @@ tmp/
 .env
 .venv/
 .venv/
+.bot-data/
 .env.*
 !.env.example
 *.secret

@@ -1,0 +1,20 @@
+services:
+  feishu-bot:
+    build:
+      context: ../..
+      dockerfile: deploy/feishu-bot/Dockerfile
+    env_file: ../../.env.feishu
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - bot-data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  bot-data:

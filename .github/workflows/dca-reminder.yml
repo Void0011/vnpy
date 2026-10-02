@@ -2,7 +2,7 @@ name: ETF DCA reminder
 
 on:
   push:
-    branches: [codex/dca-live]
+    branches: [codex/dca-live, codex/feishu-bot]
     paths:
       - scripts/dca_reminder.py
       - tests/test_dca_reminder.py
@@ -52,6 +52,7 @@ jobs:
       DCA_DRY_RUN: ${{ github.event_name == 'push' && 'true' || inputs.dry_run || 'false' }}
       DCA_AS_OF_DATE: ${{ inputs.as_of_date }}
       DCA_REQUIRE_CURRENT_TRADE_DATE: "true"
+      DCA_EVENT_NAME: ${{ github.event_name }}
 
     steps:
       - name: Check out repository
@@ -82,7 +83,7 @@ jobs:
           --state .github/dca-reminder-state.json
 
       - name: Persist duplicate-protection state
-        if: steps.reminder.outputs.state_changed == 'true'
+        if: always() && steps.reminder.outputs.state_changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

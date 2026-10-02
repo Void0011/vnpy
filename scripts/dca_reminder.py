@@ -10,9 +10,10 @@ from __future__ import annotations
 import argparse
 import base64
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as day_time, timedelta
 import hashlib
 import hmac
+import html
 import json
 import math
 import os
@@ -64,6 +65,9 @@ class ETFDashboard:
     trading_day_index: int
     cycle_due: bool
     signals: tuple[StrategySignal, ...]
+    trend: tuple[tuple[str, float, float], ...] = ()
+    bias_window: int = DEFAULT_LOOKBACK_DAYS
+    price_adjustment: str = "qfq"
 
 
 class ReminderError(RuntimeError):
@@ -91,7 +95,7 @@ def positive_int(value: Any, field_name: str, default: int) -> int:
         result = int(value)
     except (TypeError, ValueError) as exc:
         raise ReminderError(f"{field_name} 必须是整数") from exc
-    if result <= 0:
+    if isinstance(value, bool) or str(result) != str(value).strip() or result <= 0:
         raise ReminderError(f"{field_name} 必须大于 0")
     return result
 
@@ -103,8 +107,8 @@ def non_negative_float(value: Any, field_name: str, default: float = 0) -> float
         result = float(value)
     except (TypeError, ValueError) as exc:
         raise ReminderError(f"{field_name} 必须是数字") from exc
-    if result < 0:
-        raise ReminderError(f"{field_name} 不能小于 0")
+    if not math.isfinite(result) or result < 0:
+        raise ReminderError(f"{field_name} 必须是有限的非负数字")
     return result
 
 
@@ -132,19 +136,19 @@ def load_config(path: Path) -> dict[str, Any]:
     return data
 
 
-def normalize_etf_config(raw: dict[str, Any], root: dict[str, Any]) -> dict[str, Any]:
+def normalize_etf_config(raw: dict[str, Any], root: dict[str, Any], *, use_env: bool = True) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ReminderError("每个 ETF 配置必须是 JSON 对象")
     symbol = str(raw.get("symbol", "")).strip()
     if not symbol.isdigit() or len(symbol) != 6:
         raise ReminderError(f"ETF 代码必须是 6 位数字：{symbol or '<空>'}")
 
-    anchor_override = os.getenv("DCA_CYCLE_ANCHOR", "").strip()
+    anchor_override = os.getenv("DCA_CYCLE_ANCHOR", "").strip() if use_env else ""
     anchor_value = anchor_override or raw.get("cycle_anchor_date") or root.get("cycle_anchor_date")
     if not anchor_value:
         raise ReminderError(f"{symbol} 未配置 cycle_anchor_date")
 
-    cycle_override = os.getenv("DCA_CYCLE_DAYS", "").strip()
+    cycle_override = os.getenv("DCA_CYCLE_DAYS", "").strip() if use_env else ""
     cycle_value = cycle_override or raw.get("cycle_days") or root.get("cycle_days")
     mode = str(raw.get("value_averaging_mode", "simulated")).strip().lower()
     if mode not in {"simulated", "actual"}:
@@ -155,7 +159,7 @@ def normalize_etf_config(raw: dict[str, Any], root: dict[str, Any]) -> dict[str,
     if adjustment not in {"", "qfq", "hfq"}:
         raise ReminderError(f"{symbol} price_adjustment 只能是 qfq、hfq 或 none")
 
-    return {
+    config = {
         "symbol": symbol,
         "name": str(raw.get("name", symbol)).strip() or symbol,
         "price_adjustment": adjustment,
@@ -191,6 +195,30 @@ def normalize_etf_config(raw: dict[str, Any], root: dict[str, Any]) -> dict[str,
             f"{symbol}.completed_periods",
         ),
     }
+    if raw.get("parameter_history"):
+        allowed = {"base_amount", "target_growth", "drawdown_lookback_days", "bias_lookback_days"}
+        history = []
+        if not isinstance(raw["parameter_history"], list) or len(raw["parameter_history"]) > 1000:
+            raise ReminderError("参数历史必须是最多 1000 条记录的数组")
+        for change in raw["parameter_history"]:
+            if not isinstance(change, dict) or "effective_index" not in change or set(change) - allowed - {"effective_index"}:
+                raise ReminderError("参数历史包含不支持的字段")
+            normalized = {"effective_index": positive_int_allow_zero(change.get("effective_index"), "effective_index")}
+            for key in allowed & change.keys():
+                normalized[key] = (positive_int(change[key], key, DEFAULT_LOOKBACK_DAYS)
+                                   if key.endswith("lookback_days") else non_negative_float(change[key], key))
+            history.append(normalized)
+        config["parameter_history"] = sorted(history, key=lambda item: item["effective_index"])
+    return config
+
+
+def config_at_index(config: dict[str, Any], index: int) -> dict[str, Any]:
+    """Apply future parameter changes without rewriting previous simulated trades."""
+    current = dict(config)
+    for change in config.get("parameter_history", []):
+        if change["effective_index"] <= index:
+            current.update({key: value for key, value in change.items() if key != "effective_index"})
+    return current
 
 
 def positive_int_allow_zero(value: Any, field_name: str) -> int:
@@ -200,7 +228,7 @@ def positive_int_allow_zero(value: Any, field_name: str) -> int:
         result = int(value)
     except (TypeError, ValueError) as exc:
         raise ReminderError(f"{field_name} 必须是整数") from exc
-    if result < 0:
+    if isinstance(value, bool) or str(result) != str(value).strip() or result < 0:
         raise ReminderError(f"{field_name} 不能小于 0")
     return result
 
@@ -318,6 +346,7 @@ def value_averaging_signal(
 
     position = config["position_volume"]
     completed = config["completed_periods"]
+    target_value = completed * target_growth
     scheduled = [bar for bar in bars if bar.trade_date >= anchor]
     if not scheduled:
         raise ReminderError(f"{config['symbol']} 没有锚点后的行情")
@@ -325,14 +354,15 @@ def value_averaging_signal(
     due_bars = [bar for index, bar in enumerate(scheduled) if index % cycle_days == 0]
     latest_is_due = due_bars and due_bars[-1].trade_date == latest.trade_date
     history_due_bars = due_bars[:-1] if latest_is_due else due_bars
-    for bar in history_due_bars:
+    for due_index, bar in enumerate(history_due_bars):
         completed += 1
-        target_value = completed * target_growth
+        target_value += config_at_index(config, due_index * cycle_days)["target_growth"]
         diff = target_value - position * bar.close
         position += signed_value_volume(diff, position, bar.close)
 
     completed += 1
-    target_value = completed * target_growth
+    latest_index = len(scheduled) - 1
+    target_value += config_at_index(config, latest_index)["target_growth"]
     diff = target_value - position * latest.close
     volume = signed_value_volume(diff, position, latest.close)
     force_note = "；测试日即时估算" if force_send and not latest_is_due else ""
@@ -370,28 +400,36 @@ def calculate_dashboard(
     anchor: date = config["cycle_anchor_date"]
     cycle_days: int = config["cycle_days"]
     index, due = cycle_context(bars, anchor, cycle_days)
+    active = config_at_index(config, index)
 
-    drawdown = calculate_drawdown(bars, config["drawdown_lookback_days"])
+    drawdown = calculate_drawdown(bars, active["drawdown_lookback_days"])
     drawdown_factor = drawdown_multiplier(drawdown)
     drawdown_signal = make_amount_signal(
         "动态回撤阶梯",
-        config["base_amount"] * drawdown_factor,
+        active["base_amount"] * drawdown_factor,
         latest.close,
         "回撤 / 倍数",
         f"{drawdown:.2%} / {drawdown_factor:g}×",
     )
 
-    bias = calculate_bias(bars, config["bias_lookback_days"])
+    bias = calculate_bias(bars, active["bias_lookback_days"])
     bias_factor = bias_multiplier(bias)
     bias_signal = make_amount_signal(
         "长均线偏离度",
-        config["base_amount"] * bias_factor,
+        active["base_amount"] * bias_factor,
         latest.close,
         "BIAS / 倍数",
         f"{bias:.2%} / {bias_factor:g}×",
         "BIAS 超过 15% 时暂停" if bias_factor == 0 else "",
     )
     value_signal = value_averaging_signal(bars, config, force_send)
+    # Each moving average uses only prices available on that historical date.
+    window = active["bias_lookback_days"]
+    trend = tuple(
+        (bar.trade_date.isoformat(), bar.close,
+         round(sum(item.close for item in bars[max(0, i - window + 1):i + 1]) / min(i + 1, window), 6))
+        for i, bar in enumerate(bars) if i >= len(bars) - 60
+    )
 
     return ETFDashboard(
         symbol=config["symbol"],
@@ -402,7 +440,21 @@ def calculate_dashboard(
         trading_day_index=index,
         cycle_due=due,
         signals=(drawdown_signal, bias_signal, value_signal),
+        trend=trend,
+        bias_window=window,
+        price_adjustment=config["price_adjustment"],
     )
+
+
+def latest_scheduled_date(now: datetime | None = None) -> date:
+    """Most recent weekday 17:17 in Beijing, including delayed overnight runs."""
+    now = (now or datetime.now(ZoneInfo("Asia/Shanghai"))).astimezone(ZoneInfo("Asia/Shanghai"))
+    day = now.date()
+    if now.time() < day_time(17, 17):
+        day -= timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day
 
 
 def dataframe_to_bars(frame: Any) -> list[PriceBar]:
@@ -420,7 +472,9 @@ def dataframe_to_bars(frame: Any) -> list[PriceBar]:
         trade_date = raw_date.date() if hasattr(raw_date, "date") else date.fromisoformat(str(raw_date)[:10])
         close = float(row[close_column])
         high = float(row[high_column]) if high_column else close
-        if close > 0:
+        if math.isfinite(close) and close > 0:
+            if not math.isfinite(high):
+                raise ReminderError("行情最高价无效")
             bars.append(PriceBar(trade_date, close, high if high > 0 else close))
     return sorted({bar.trade_date: bar for bar in bars}.values(), key=lambda item: item.trade_date)
 
@@ -582,69 +636,78 @@ def action_label(action: str) -> str:
 
 
 def build_feishu_card(dashboards: list[ETFDashboard], forced: bool = False) -> dict[str, Any]:
-    latest_dates = sorted({item.signal_date.isoformat() for item in dashboards})
+    """Trend-first Feishu Card JSON 2.0; charts contain actual historical bars."""
     subtitle = "测试强制推送" if forced else "周期到期提醒"
-    elements: list[dict[str, Any]] = [
-        {
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": (
-                    f"**信号日期：** {' / '.join(latest_dates)}　**状态：** {subtitle}\n"
-                    "金额按收盘价估算，实际成交以券商为准。"
-                ),
-            },
-        }
-    ]
+    elements: list[dict[str, Any]] = []
+
+    def md(content: str, size: str = "normal") -> dict[str, Any]:
+        return {"tag": "markdown", "content": content, "text_size": size}
+
     for dashboard in dashboards:
-        elements.append({"tag": "hr"})
-        elements.append(
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": (
-                        f"### {dashboard.name}（{dashboard.symbol}）\n"
-                        f"参考价 **￥{dashboard.signals[0].reference_price:,.3f}** · "
-                        f"周期 **{dashboard.cycle_days} 个交易日** · "
-                        f"锚点 **{dashboard.anchor_date.isoformat()}**"
-                    ),
-                },
-            }
-        )
+        if elements:
+            elements.append({"tag": "hr"})
+        name = html.escape(dashboard.name).replace("@", "＠")
+        elapsed = dashboard.trading_day_index % dashboard.cycle_days
+        remaining = dashboard.cycle_days - elapsed
+        progress = "本期到期" if dashboard.cycle_due else f"本轮已过 {elapsed}/{dashboard.cycle_days} 个交易日 · 距下期 {remaining} 个交易日"
+        cells = round(elapsed / dashboard.cycle_days * 10)
+        bar = "■" * cells + "□" * (10 - cells)
+        adjustment = {"qfq": "前复权", "hfq": "后复权", "": "未复权"}.get(dashboard.price_adjustment, "")
+        elements.extend([
+            md(f"**{name}** · {dashboard.symbol}", "heading"),
+            md(f"参考收盘价 **￥{dashboard.signals[0].reference_price:,.3f}**\n"
+               f"行情日期 {dashboard.signal_date.isoformat()} · {adjustment}"),
+            md(f"**{progress}**" + (f"\n<font color='blue'>{bar}</font>" if elapsed else "")),
+        ])
+        if dashboard.trend:
+            values = []
+            for day, close, average in dashboard.trend:
+                values.extend([
+                    {"日期": day, "价格": close, "曲线": "收盘价"},
+                    {"日期": day, "价格": average, "曲线": f"{dashboard.bias_window}日均线"},
+                ])
+            elements.extend([
+                md("**价格与参考均线**"),
+                {"tag": "chart", "aspect_ratio": "2:1", "chart_spec": {
+                    "type": "line", "data": {"values": values},
+                    "xField": "日期", "yField": "价格", "seriesField": "曲线",
+                    "legends": {"visible": True, "orient": "bottom"},
+                    "axes": [{"orient": "left", "zero": False,
+                              "title": {"visible": True, "text": "元/份"}},
+                             {"orient": "bottom", "label": {"autoHide": True}}],
+                    "point": {"visible": False},
+                }},
+            ])
+        elements.append(md("**三种策略 · 分别参考**"))
         for signal in dashboard.signals:
-            signed_volume = f"{signal.volume:+,}" if signal.volume else "0"
-            content = (
-                f"**{signal.strategy}**　{action_label(signal.action)}\n"
-                f"份数：**{signed_volume}**　参考金额：**￥{signal.estimated_amount:,.2f}**\n"
-                f"{signal.metric_name}：{signal.metric_value}"
-            )
+            content = f"**{signal.strategy}**\n{signal.metric_name}：{signal.metric_value}"
             if signal.note:
                 content += f"\n<font color='grey'>{signal.note}</font>"
-            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": content}})
-
-    elements.append({"tag": "hr"})
-    elements.append(
-        {
-            "tag": "note",
-            "elements": [
-                {
-                    "tag": "plain_text",
-                    "content": "策略信号仅供个人决策参考；价值平均的模拟结果不代表真实持仓。",
-                }
-            ],
-        }
-    )
+            elements.append({"tag": "column_set", "flex_mode": "stretch", "columns": [
+                {"tag": "column", "width": "weighted", "weight": 3, "elements": [md(content)]},
+                {"tag": "column", "width": "weighted", "weight": 2, "elements": [
+                    md(f"{action_label(signal.action)} **￥{signal.estimated_amount:,.2f}**\n"
+                       f"{abs(signal.volume):,} 份")
+                ]},
+            ]})
+            elements.append({"tag": "hr"})
+        elements.append({"tag": "collapsible_panel", "expanded": False,
+                         "header": {"title": {"tag": "plain_text", "content": "查看周期与计算口径"}},
+                         "elements": [md(f"周期起算日 {dashboard.anchor_date.isoformat()} · "
+                                         f"每 {dashboard.cycle_days} 个交易日 · 均线窗口 {dashboard.bias_window} 日\n"
+                                         "金额按收盘价及整手份数估算；模拟结果假设历史建议全部成交。")]})
+    elements.append(md("三种策略独立参考，金额不应相加执行。模拟持仓不代表真实持仓。", "notation"))
     return {
         "msg_type": "interactive",
         "card": {
-            "config": {"wide_screen_mode": True},
+            "schema": "2.0",
+            "config": {"update_multi": True},
             "header": {
                 "template": "blue",
                 "title": {"tag": "plain_text", "content": "ETF 定投策略看板"},
                 "subtitle": {"tag": "plain_text", "content": subtitle},
             },
-            "elements": elements,
+            "body": {"elements": elements},
         },
     }
 
@@ -694,7 +757,7 @@ def send_feishu(payload: dict[str, Any], webhook_url: str, signing_secret: str =
             response_data = json.loads(response.read().decode("utf-8"))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise ReminderError(f"飞书消息发送失败：{type(exc).__name__}") from exc
-    code = response_data.get("code", response_data.get("StatusCode", 0))
+    code = response_data.get("code", response_data.get("StatusCode"))
     if code not in (0, "0"):
         message = response_data.get("msg", response_data.get("StatusMessage", "unknown error"))
         raise ReminderError(f"飞书拒绝消息：{message}")
@@ -708,7 +771,8 @@ def emit_github_output(name: str, value: str) -> None:
 
 
 def print_dashboard(dashboards: list[ETFDashboard]) -> None:
-    print(json.dumps([asdict(item) for item in dashboards], ensure_ascii=False, indent=2, default=str))
+    summaries = [{key: value for key, value in asdict(item).items() if key != "trend"} for item in dashboards]
+    print(json.dumps(summaries, ensure_ascii=False, indent=2, default=str))
 
 
 def run(args: argparse.Namespace) -> int:
@@ -729,6 +793,7 @@ def run(args: argparse.Namespace) -> int:
     as_of = (
         parse_date(as_of_text, "as_of_date")
         if as_of_text
+        else latest_scheduled_date() if os.getenv("DCA_EVENT_NAME") == "schedule"
         else datetime.now(ZoneInfo("Asia/Shanghai")).date()
     )
     if not force_send and not is_exchange_trade_day(as_of):
@@ -739,7 +804,11 @@ def run(args: argparse.Namespace) -> int:
     dashboards: list[ETFDashboard] = []
     normalized_configs: list[dict[str, Any]] = []
     for raw in config_root["etfs"]:
+        if not raw.get("enabled", True):
+            continue
         config = normalize_etf_config(raw, config_root)
+        if as_of < config["cycle_anchor_date"] and not force_send:
+            continue
         normalized_configs.append(config)
         history_days = max(config["drawdown_lookback_days"], config["bias_lookback_days"])
         history_start = min(config["cycle_anchor_date"], as_of - timedelta(days=history_days * 2 + 60))
@@ -771,24 +840,31 @@ def run(args: argparse.Namespace) -> int:
         state.get("last_message_key") == message_key
         or message_key in state.get("sent_message_keys", [])
     )
-    if already_sent and not args.allow_duplicate:
+    if already_sent and not args.allow_duplicate and not dry_run:
         print("检测到相同信号已经发送，本次跳过")
         emit_github_output("state_changed", "false")
         return 0
 
-    card = build_feishu_card(send_items, forced=force_send)
     if dry_run:
         print("DRY RUN：已生成飞书交互式卡片，但未发送且未更新幂等状态")
-        print(json.dumps(card, ensure_ascii=False, indent=2))
+        for item in send_items:
+            print(json.dumps(build_feishu_card([item], forced=force_send), ensure_ascii=False, indent=2))
         emit_github_output("state_changed", "false")
         return 0
     if not webhook:
         raise ReminderError("未配置 FEISHU_WEBHOOK_URL GitHub Secret")
 
-    send_feishu(card, webhook, signing_secret)
-    save_state(args.state, message_key)
-    emit_github_output("state_changed", "true")
-    print("飞书策略看板发送成功，幂等状态已更新")
+    # One product per card keeps charts readable and stays within webhook size limits.
+    by_symbol = {config["symbol"]: config for config in normalized_configs}
+    for item in send_items:
+        item_key = dashboard_message_key([item], config_digest({"etfs": [by_symbol[item.symbol]]}))
+        current = load_state(args.state)
+        if item_key in current.get("sent_message_keys", []) and not args.allow_duplicate:
+            continue
+        send_feishu(build_feishu_card([item], forced=force_send), webhook, signing_secret)
+        save_state(args.state, item_key)
+        emit_github_output("state_changed", "true")
+        print(f"{item.symbol} 飞书策略看板发送成功，幂等状态已更新")
     return 0
 
 

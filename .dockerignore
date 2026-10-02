@@ -1,0 +1,10 @@
+*
+!scripts/
+!scripts/*.py
+!requirements-dca-reminder.txt
+!requirements-feishu-bot.txt
+!.github/
+!.github/dca-reminder.json
+!deploy/
+!deploy/feishu-bot/
+!deploy/feishu-bot/Dockerfile

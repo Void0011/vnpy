@@ -1,0 +1,4 @@
+-r requirements-dca-reminder.txt
+lark-oapi==1.7.3
+# The SDK's vendored protobuf still imports pkg_resources.
+setuptools==80.9.0
